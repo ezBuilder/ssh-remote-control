@@ -1,2 +1,0 @@
-[console_scripts]
-ssh-remote-control-mcp = ssh_remote_control.server:main
