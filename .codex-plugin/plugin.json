@@ -1,0 +1,28 @@
+{
+  "name": "ssh-remote-control",
+  "version": "0.1.0",
+  "description": "Persistent SSH remote control tools for Codex via MCP.",
+  "homepage": "https://github.com/ezBuilder/ssh-remote-control",
+  "repository": "https://github.com/ezBuilder/ssh-remote-control",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SSH Remote Control",
+    "shortDescription": "Persistent SSH sessions and remote file tools",
+    "longDescription": "Operate on VPS hosts from local Codex with saved SSH profiles, persistent sessions, remote file tools, and sync.",
+    "developerName": "ezbuilder",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "Automation"
+    ],
+    "websiteURL": "https://github.com/ezBuilder/ssh-remote-control",
+    "defaultPrompt": [
+      "Connect to my prod VPS and run diagnostics.",
+      "Upload this build to the remote host.",
+      "Read and patch files on the server over SSH."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

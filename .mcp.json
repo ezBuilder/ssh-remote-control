@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ssh-remote-control": {
+      "command": "python",
+      "args": [
+        "scripts/run_server.py"
+      ],
+      "cwd": "."
+    }
+  }
+}

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ssh-remote-control"
+version = "0.1.0"
+description = "Persistent SSH remote control MCP plugin for Codex"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "ezbuilder" }
+]
+dependencies = [
+  "mcp>=1.9.0",
+  "paramiko>=3.4.0",
+  "keyring>=25.0.0"
+]
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+ssh-remote-control-mcp = "ssh_remote_control.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
