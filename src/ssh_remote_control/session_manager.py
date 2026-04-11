@@ -80,6 +80,7 @@ class SessionManager:
     def write_text_file(self, profile_name: str, path: str, content: str) -> None:
         session = self._require_session(profile_name)
         target_path = self._resolve_remote_path(session.profile, path)
+        self._ensure_remote_directory(session.sftp, posixpath.dirname(target_path) or "/")
         with session.sftp.file(target_path, "wb") as handle:
             handle.write(content.encode("utf-8"))
 

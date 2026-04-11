@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Persistent SSH remote control MCP plugin for Codex"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "ezbuilder" }
 ]
@@ -23,6 +23,7 @@ dev = []
 
 [project.scripts]
 ssh-remote-control-mcp = "ssh_remote_control.server:main"
+codex-remote = "ssh_remote_control.remote_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import posixpath
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 try:
@@ -45,10 +47,16 @@ def _profile_to_summary(profile: SSHProfile) -> dict[str, Any]:
         "port": profile.port,
         "username": profile.username,
         "remote_root": profile.remote_root,
+        "codex_binary": profile.codex_binary,
+        "codex_app_server_port": profile.codex_app_server_port,
         "auth_mode": profile.auth_mode.value,
         "password_storage": profile.password_storage.value,
         "ssh_config_host": profile.ssh_config_host,
-        "key_path": profile.key_path,
+        "key_path_configured": bool(profile.key_path),
+        "allow_connect_without_confirmation": profile.allow_connect_without_confirmation,
+        "allowed_exec_prefixes": profile.allowed_exec_prefixes,
+        "allowed_read_roots": profile.allowed_read_roots,
+        "allowed_write_roots": profile.allowed_write_roots,
     }
 
 
@@ -82,6 +90,8 @@ def _resolve_profile(profile: SSHProfile) -> SSHProfile:
         port=int(resolved.get("port", profile.port)),
         username=profile.username or resolved.get("user"),
         remote_root=profile.remote_root,
+        codex_binary=profile.codex_binary,
+        codex_app_server_port=profile.codex_app_server_port,
         auth_mode=auth_mode,
         password_storage=profile.password_storage,
         ssh_config_host=profile.ssh_config_host,
@@ -94,6 +104,81 @@ def _require_profile(profile_name: str) -> SSHProfile:
     if profile is None:
         raise ValueError(f"unknown SSH profile: {profile_name}")
     return profile
+
+
+def _resolve_policy_path(profile: SSHProfile, path: str) -> PurePosixPath:
+    resolved = SessionManager._resolve_remote_path(profile, path)
+    normalized = posixpath.normpath(resolved or ".")
+    return PurePosixPath(normalized)
+
+
+def _path_is_allowlisted(
+    profile: SSHProfile,
+    requested_path: str,
+    allowed_roots: list[str],
+) -> bool:
+    if not allowed_roots:
+        return False
+
+    target = _resolve_policy_path(profile, requested_path)
+    for allowed_root in allowed_roots:
+        allowed = _resolve_policy_path(profile, allowed_root)
+        if target == allowed or allowed in target.parents:
+            return True
+    return False
+
+
+def _command_is_allowlisted(command: str, allowed_prefixes: list[str]) -> bool:
+    normalized_command = command.strip()
+    for prefix in allowed_prefixes:
+        normalized_prefix = prefix.strip()
+        if normalized_prefix and normalized_command.startswith(normalized_prefix):
+            return True
+    return False
+
+
+def _require_connect_authorization(profile: SSHProfile, confirm: bool) -> None:
+    if confirm or profile.allow_connect_without_confirmation:
+        return
+    raise ValueError(
+        "ssh_connect requires confirm=True or allow_connect_without_confirmation on the profile"
+    )
+
+
+def _require_exec_authorization(
+    profile: SSHProfile,
+    command: str,
+    confirm: bool,
+) -> None:
+    if confirm or _command_is_allowlisted(command, profile.allowed_exec_prefixes):
+        return
+    raise ValueError(
+        "ssh_exec requires confirm=True unless the command matches allowed_exec_prefixes"
+    )
+
+
+def _require_read_authorization(
+    profile: SSHProfile,
+    remote_path: str,
+    confirm: bool,
+) -> None:
+    if confirm or _path_is_allowlisted(profile, remote_path, profile.allowed_read_roots):
+        return
+    raise ValueError(
+        "Remote reads require confirm=True unless the path matches allowed_read_roots"
+    )
+
+
+def _require_write_authorization(
+    profile: SSHProfile,
+    remote_path: str,
+    confirm: bool,
+) -> None:
+    if confirm or _path_is_allowlisted(profile, remote_path, profile.allowed_write_roots):
+        return
+    raise ValueError(
+        "Remote writes require confirm=True unless the path matches allowed_write_roots"
+    )
 
 
 def _maybe_store_secret(
@@ -129,10 +214,16 @@ def ssh_profile_save(
     port: int = 22,
     username: str | None = None,
     remote_root: str | None = None,
+    codex_binary: str = "codex",
+    codex_app_server_port: int = 4500,
     auth_mode: str = AuthMode.SSH_CONFIG.value,
     password_storage: str = PasswordStorage.NEVER.value,
     ssh_config_host: str | None = None,
     key_path: str | None = None,
+    allow_connect_without_confirmation: bool = False,
+    allowed_exec_prefixes: list[str] | None = None,
+    allowed_read_roots: list[str] | None = None,
+    allowed_write_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Save or update an SSH profile for later connections."""
 
@@ -142,10 +233,16 @@ def ssh_profile_save(
         port=port,
         username=username,
         remote_root=remote_root,
+        codex_binary=codex_binary,
+        codex_app_server_port=codex_app_server_port,
         auth_mode=AuthMode(auth_mode),
         password_storage=PasswordStorage(password_storage),
         ssh_config_host=ssh_config_host,
         key_path=str(Path(key_path).expanduser()) if key_path else None,
+        allow_connect_without_confirmation=allow_connect_without_confirmation,
+        allowed_exec_prefixes=list(allowed_exec_prefixes or []),
+        allowed_read_roots=list(allowed_read_roots or []),
+        allowed_write_roots=list(allowed_write_roots or []),
     )
     profile_store.save_profile(profile)
     return {"saved": True, "profile": _profile_to_summary(profile)}
@@ -168,11 +265,13 @@ def ssh_connect(
     profile_name: str,
     password: str | None = None,
     passphrase: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Connect a saved SSH profile and keep the session alive in the MCP server."""
 
     stored_profile = _require_profile(profile_name)
     profile = _resolve_profile(stored_profile)
+    _require_connect_authorization(profile, confirm)
     resolved_password = _resolve_secret(profile, password, "password")
     resolved_passphrase = _resolve_secret(profile, passphrase, "passphrase")
     session_manager.connect_profile(
@@ -228,16 +327,25 @@ def ssh_exec(
     command: str,
     cwd: str | None = None,
     env: dict[str, str] | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Run a shell command on a connected profile."""
 
+    profile = _require_profile(profile_name)
+    _require_exec_authorization(profile, command, confirm)
     return session_manager.run_command(profile_name, command, cwd=cwd, env=env)
 
 
 @app.tool()
-def ssh_read_file(profile_name: str, remote_path: str) -> dict[str, Any]:
+def ssh_read_file(
+    profile_name: str,
+    remote_path: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
     """Read a UTF-8 text file from a connected profile."""
 
+    profile = _require_profile(profile_name)
+    _require_read_authorization(profile, remote_path, confirm)
     return {
         "path": remote_path,
         "content": session_manager.read_text_file(profile_name, remote_path),
@@ -245,25 +353,46 @@ def ssh_read_file(profile_name: str, remote_path: str) -> dict[str, Any]:
 
 
 @app.tool()
-def ssh_write_file(profile_name: str, remote_path: str, content: str) -> dict[str, Any]:
+def ssh_write_file(
+    profile_name: str,
+    remote_path: str,
+    content: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
     """Write a UTF-8 text file to a connected profile, replacing previous contents."""
 
+    profile = _require_profile(profile_name)
+    _require_write_authorization(profile, remote_path, confirm)
     session_manager.write_text_file(profile_name, remote_path, content)
     return {"written": True, "path": remote_path}
 
 
 @app.tool()
-def ssh_upload(profile_name: str, local_path: str, remote_path: str) -> dict[str, Any]:
+def ssh_upload(
+    profile_name: str,
+    local_path: str,
+    remote_path: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
     """Upload a local file or directory to a connected profile."""
 
+    profile = _require_profile(profile_name)
+    _require_write_authorization(profile, remote_path, confirm)
     session_manager.upload_path(profile_name, local_path, remote_path)
     return {"uploaded": True, "local_path": local_path, "remote_path": remote_path}
 
 
 @app.tool()
-def ssh_download(profile_name: str, remote_path: str, local_path: str) -> dict[str, Any]:
+def ssh_download(
+    profile_name: str,
+    remote_path: str,
+    local_path: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
     """Download a remote file or directory from a connected profile."""
 
+    profile = _require_profile(profile_name)
+    _require_read_authorization(profile, remote_path, confirm)
     session_manager.download_path(profile_name, remote_path, local_path)
     return {"downloaded": True, "remote_path": remote_path, "local_path": local_path}
 
@@ -274,8 +403,17 @@ def ssh_sync(
     local_path: str,
     remote_path: str,
     direction: str = "upload",
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Recursively sync content between local and remote paths."""
+
+    profile = _require_profile(profile_name)
+    if direction == "upload":
+        _require_write_authorization(profile, remote_path, confirm)
+    elif direction == "download":
+        _require_read_authorization(profile, remote_path, confirm)
+    else:
+        raise ValueError(f"unsupported sync direction: {direction}")
 
     session_manager.sync_path(
         profile_name,

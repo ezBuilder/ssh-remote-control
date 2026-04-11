@@ -33,7 +33,9 @@ class FakeSFTPClient:
                 return False
 
             def write(self, data: bytes) -> None:
-                sftp.directories.add(posixpath.dirname(path) or "/")
+                parent = posixpath.dirname(path) or "/"
+                if parent not in sftp.directories:
+                    raise FileNotFoundError(parent)
                 sftp.files[path] = data
 
             def read(self) -> bytes:
@@ -157,6 +159,20 @@ class SessionManagerTests(unittest.TestCase):
         manager.write_text_file("prod", "notes.txt", "hello world")
 
         self.assertEqual(manager.read_text_file("prod", "notes.txt"), "hello world")
+
+    def test_write_text_file_creates_missing_remote_parent_directories(self) -> None:
+        fake_client = FakeSSHClient()
+        manager = SessionManager(client_factory=lambda: fake_client)
+        manager.connect_profile(self._profile(), password="secret")
+
+        manager.write_text_file("prod", "releases/2026/smoke.txt", "hello")
+
+        self.assertIn("/srv/app/releases", fake_client.sftp.directories)
+        self.assertIn("/srv/app/releases/2026", fake_client.sftp.directories)
+        self.assertEqual(
+            fake_client.sftp.files["/srv/app/releases/2026/smoke.txt"],
+            b"hello",
+        )
 
     def test_run_command_executes_inside_remote_root(self) -> None:
         fake_client = FakeSSHClient()
